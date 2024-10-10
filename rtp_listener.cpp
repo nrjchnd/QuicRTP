@@ -1,34 +1,45 @@
 #include "rtp_listener.h"
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <cstring>
+#include "logger.h"
 #include <iostream>
+#include <stdexcept>
+#include <srtp2/srtp.h>
 
-RtpListener::RtpListener(const std::string& ip, int port, bool isSrtp, const std::string& srtpKey)
-    : ip_(ip), port_(port), isSrtp_(isSrtp), srtpKey_(srtpKey), sockfd_(-1), running_(false), srtpSession_(nullptr)
+RtpListener::RtpListener(boost::asio::io_context& io_context, bool isSrtp, const std::string& srtpKey)
+    : isSrtp_(isSrtp), srtpKey_(srtpKey), socket_(io_context)
 {
-    // Initialize SRTP if needed
-    if (isSrtp_) {
-        srtp_init();
-        memset(&policy_, 0, sizeof(policy_));
+    try {
+        if (isSrtp_) {
+            if (srtp_init() != srtp_err_status_ok) {
+                throw std::runtime_error("Failed to initialize SRTP");
+            }
+            memset(&policy_, 0, sizeof(policy_));
+            srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy_.rtp);
+            srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy_.rtcp);
+            policy_.ssrc.type = ssrc_any_inbound;
+            policy_.key = (uint8_t*)malloc(30);
 
-        // Assuming AES_CM_128_HMAC_SHA1_80 for simplicity
-        srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy_.rtp);
-        srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy_.rtcp);
-        policy_.ssrc.type = ssrc_any_inbound;
-        policy_.key = (uint8_t*)malloc(30); // Key length for AES_CM_128_HMAC_SHA1_80 is 30 bytes
+            if (policy_.key == nullptr) {
+                throw std::runtime_error("Failed to allocate memory for SRTP key");
+            }
 
-        // Key conversion from hex string to byte array
-        for (size_t i = 0; i < srtpKey_.length() && i / 2 < 30; i += 2) {
-            std::string byteString = srtpKey_.substr(i, 2);
-            uint8_t byte = (uint8_t)strtol(byteString.c_str(), nullptr, 16);
-            policy_.key[i / 2] = byte;
+            // Key conversion from hex string to byte array
+            if (srtpKey_.length() != 60) { // 30 bytes in hex representation
+                throw std::runtime_error("Invalid SRTP key length");
+            }
+
+            for (size_t i = 0; i < srtpKey_.length(); i += 2) {
+                std::string byteString = srtpKey_.substr(i, 2);
+                uint8_t byte = static_cast<uint8_t>(std::stoul(byteString, nullptr, 16));
+                policy_.key[i / 2] = byte;
+            }
+
+            if (srtp_create(&srtpSession_, &policy_) != srtp_err_status_ok) {
+                throw std::runtime_error("Error creating SRTP session");
+            }
         }
-
-        srtp_err_status_t status = srtp_create(&srtpSession_, &policy_);
-        if (status != srtp_err_status_ok) {
-            std::cerr << "Error creating SRTP session" << std::endl;
-        }
+    } catch (const std::exception& e) {
+        Logger::getLogger()->error("RtpListener initialization error: {}", e.what());
+        throw;
     }
 }
 
@@ -37,60 +48,71 @@ RtpListener::~RtpListener() {
     if (isSrtp_) {
         srtp_dealloc(srtpSession_);
         srtp_shutdown();
+        free(policy_.key);
     }
 }
 
-void RtpListener::start() {
-    running_ = true;
-    listenerThread_ = std::thread(&RtpListener::listenLoop, this);
+void RtpListener::start(uint16_t port) {
+    try {
+        boost::asio::ip::udp::endpoint endpoint(boost::asio::ip::udp::v4(), port);
+        socket_.open(endpoint.protocol());
+        socket_.bind(endpoint);
+
+        Logger::getLogger()->info("RTP Listener started on port {}", port);
+
+        receive();
+    } catch (const std::exception& e) {
+        Logger::getLogger()->error("Error starting RTP listener on port {}: {}", port, e.what());
+        throw;
+    }
 }
 
 void RtpListener::stop() {
-    running_ = false;
-    if (listenerThread_.joinable())
-        listenerThread_.join();
-
-    if (sockfd_ != -1)
-        close(sockfd_);
+    try {
+        socket_.close();
+        Logger::getLogger()->info("RTP Listener stopped");
+    } catch (const std::exception& e) {
+        Logger::getLogger()->error("Error stopping RTP listener: {}", e.what());
+    }
 }
 
-void RtpListener::setPacketHandler(std::function<void(const uint8_t* data, size_t len)> handler) {
+void RtpListener::setPacketHandler(std::function<void(const uint8_t* data, size_t len, const boost::asio::ip::udp::endpoint& sender)> handler) {
     packetHandler_ = handler;
 }
 
-void RtpListener::listenLoop() {
-    sockfd_ = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd_ < 0) {
-        std::cerr << "Error creating socket" << std::endl;
-        return;
-    }
+void RtpListener::receive() {
+    socket_.async_receive_from(
+        boost::asio::buffer(recvBuffer_), remoteEndpoint_,
+        [this](const boost::system::error_code& error, size_t bytes_transferred) {
+            handleReceive(error, bytes_transferred);
+        }
+    );
+}
 
-    sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port_);
-    addr.sin_addr.s_addr = inet_addr(ip_.c_str());
+void RtpListener::handleReceive(const boost::system::error_code& error, size_t bytes_transferred) {
+    if (!error) {
+        uint8_t* data = recvBuffer_.data();
+        size_t len = bytes_transferred;
 
-    if (bind(sockfd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        std::cerr << "Error binding socket" << std::endl;
-        return;
-    }
-
-    uint8_t buffer[1500];
-
-    while (running_) {
-        ssize_t len = recvfrom(sockfd_, buffer, sizeof(buffer), 0, nullptr, nullptr);
-        if (len > 0) {
-            if (isSrtp_) {
-                srtp_err_status_t status = srtp_unprotect(srtpSession_, buffer, (int*)&len);
-                if (status != srtp_err_status_ok) {
-                    std::cerr << "Error decrypting SRTP packet" << std::endl;
-                    continue;
-                }
+        if (isSrtp_) {
+            srtp_err_status_t status = srtp_unprotect(srtpSession_, data, (int*)&len);
+            if (status != srtp_err_status_ok) {
+                Logger::getLogger()->error("Error decrypting SRTP packet");
+                receive();
+                return;
             }
+        }
 
-            if (packetHandler_) {
-                packetHandler_(buffer, len);
-            }
+        if (packetHandler_) {
+            packetHandler_(data, len, remoteEndpoint_);
+        }
+
+        receive();
+    } else {
+        Logger::getLogger()->error("Receive error: {}", error.message());
+        // Attempt to restart receive if the error is recoverable
+        if (error != boost::asio::error::operation_aborted) {
+            receive();
         }
     }
 }

@@ -4,6 +4,7 @@
 #include <functional>
 #include <cstdint>
 #include <cstddef>
+#include <mutex>
 
 class Translator {
 public:
@@ -19,6 +20,7 @@ public:
 private:
     std::function<void(const uint8_t* data, size_t len)> rtpToQuicHandler_;
     std::function<void(const uint8_t* data, size_t len)> quicToRtpHandler_;
+    std::mutex translatorMutex_;
 };
 
 #endif // TRANSLATOR_H

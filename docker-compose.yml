@@ -1,0 +1,15 @@
+version: '3'
+services:
+  translator:
+    build: .
+    ports:
+      - "5000-5100:5000-5100/udp"
+    environment:
+      - SRTP_KEY=${SRTP_KEY}
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"

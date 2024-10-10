@@ -3,11 +3,12 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <stdexcept>
 
 bool Config::loadConfig(const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open())
-        return false;
+        throw std::runtime_error("Unable to open configuration file: " + filename);
 
     std::string line;
     std::string currentSection;
@@ -35,6 +36,8 @@ bool Config::loadConfig(const std::string& filename) {
                 std::string value = line.substr(equalPos + 1);
 
                 data[currentSection][key] = value;
+            } else {
+                throw std::runtime_error("Invalid line in config file: " + line);
             }
         }
     }
@@ -61,5 +64,20 @@ bool Config::getBool(const std::string& section, const std::string& key) const {
 
 int Config::getInt(const std::string& section, const std::string& key) const {
     std::string val = get(section, key);
-    return std::stoi(val);
+    try {
+        return std::stoi(val);
+    } catch (const std::invalid_argument&) {
+        throw std::runtime_error("Invalid integer value for " + key + " in section " + section);
+    }
+}
+
+std::vector<std::string> Config::getList(const std::string& section, const std::string& key) const {
+    std::string val = get(section, key);
+    std::vector<std::string> list;
+    std::stringstream ss(val);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        list.push_back(item);
+    }
+    return list;
 }

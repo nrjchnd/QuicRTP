@@ -4,6 +4,8 @@
 #include <string>
 #include <functional>
 #include <msquic.h>
+#include <memory>
+#include <mutex>
 
 class QuicClient {
 public:
@@ -25,6 +27,7 @@ private:
     HQUIC registration_;
     HQUIC configuration_;
     HQUIC connection_;
+    std::mutex connectionMutex_;
 
     std::function<void(const uint8_t* data, size_t len)> dataHandler_;
 

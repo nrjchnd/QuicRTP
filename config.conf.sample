@@ -1,17 +1,17 @@
-[Endpoints]
-endpoint1_rtp_ip = 192.168.1.10
-endpoint1_rtp_port = 5004
-endpoint1_quic_ip = 192.168.1.20
-endpoint1_quic_port = 4433
-
-endpoint2_rtp_ip = 192.168.1.11
-endpoint2_rtp_port = 5005
-endpoint2_quic_ip = 192.168.1.21
-endpoint2_quic_port = 4434
+[RTP]
+port_range_start = 5000
+port_range_end = 5100
 
 [SRTP]
 enable = true
-key = your_srtp_key_here
+# The SRTP key should be provided via environment variable or secure storage
 
 [Cache]
-redis_uri = tcp://127.0.0.1:6379
+redis_uri = tcp://redis:6379
+
+[Logging]
+level = info
+
+[QUIC]
+server_ip = 192.168.1.100
+server_port = 4433

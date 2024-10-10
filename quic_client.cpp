@@ -1,46 +1,63 @@
 #include "quic_client.h"
+#include "logger.h"
 #include <iostream>
+#include <stdexcept>
 
 const QUIC_API_TABLE* MsQuic;
+HQUIC registration_ = nullptr;
 
 QuicClient::QuicClient(const std::string& serverIp, uint16_t serverPort)
-    : serverIp_(serverIp), serverPort_(serverPort), registration_(nullptr), configuration_(nullptr), connection_(nullptr)
+    : serverIp_(serverIp), serverPort_(serverPort), configuration_(nullptr), connection_(nullptr)
 {
+    // Initialize MsQuic
+    if (QUIC_FAILED(MsQuicOpen(&MsQuic))) {
+        throw std::runtime_error("MsQuicOpen failed");
+    }
+
+    // Create a registration for the app
+    QUIC_STATUS status = MsQuic->RegistrationOpen(nullptr, &registration_);
+    if (QUIC_FAILED(status)) {
+        throw std::runtime_error("RegistrationOpen failed");
+    }
 }
 
 QuicClient::~QuicClient() {
     stop();
+    if (registration_) {
+        MsQuic->RegistrationClose(registration_);
+        registration_ = nullptr;
+    }
+    MsQuicClose(MsQuic);
 }
 
 bool QuicClient::initialize() {
-    QUIC_STATUS Status;
-    QUIC_REGISTRATION_CONFIG RegConfig = { "quic_client", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
-
-    if (QUIC_FAILED(Status = MsQuicOpen(&MsQuic))) {
-        std::cerr << "MsQuicOpen failed" << std::endl;
-        return false;
-    }
-
-    if (QUIC_FAILED(Status = MsQuic->RegistrationOpen(&RegConfig, &registration_))) {
-        std::cerr << "RegistrationOpen failed" << std::endl;
-        return false;
-    }
+    QUIC_STATUS status;
 
     // Configuration settings
-    const QUIC_BUFFER Alpn = { sizeof("hq-29") - 1, (uint8_t*)"hq-29" };
-    QUIC_SETTINGS Settings = {0};
-    Settings.IsSet.PeerUnidiStreamCount = TRUE;
-    Settings.PeerUnidiStreamCount = 100;
-    Settings.IsSet.IdleTimeoutMs = TRUE;
-    Settings.IdleTimeoutMs = 30000;
+    const char* alpn = "hq-29";
+    QUIC_BUFFER alpnBuffer;
+    alpnBuffer.Length = (uint32_t)strlen(alpn);
+    alpnBuffer.Buffer = (uint8_t*)alpn;
 
-    if (QUIC_FAILED(Status = MsQuic->ConfigurationOpen(registration_, &Alpn, 1, &Settings, sizeof(Settings), nullptr, &configuration_))) {
-        std::cerr << "ConfigurationOpen failed" << std::endl;
+    QUIC_SETTINGS settings = {0};
+    settings.IsSet.PeerUnidiStreamCount = TRUE;
+    settings.PeerUnidiStreamCount = 100;
+    settings.IsSet.IdleTimeoutMs = TRUE;
+    settings.IdleTimeoutMs = 30000;
+    settings.IsSet.DisconnectTimeoutMs = TRUE;
+    settings.DisconnectTimeoutMs = 10000;
+    settings.IsSet.CertValidationFlags = TRUE;
+    settings.CertValidationFlags = QUIC_CERTIFICATE_FLAG_DISABLE_CERT_VALIDATION;
+
+    status = MsQuic->ConfigurationOpen(registration_, &alpnBuffer, 1, &settings, sizeof(settings), nullptr, &configuration_);
+    if (QUIC_FAILED(status)) {
+        Logger::getLogger()->error("ConfigurationOpen failed");
         return false;
     }
 
-    if (QUIC_FAILED(Status = MsQuic->ConfigurationLoadCredential(configuration_, nullptr))) {
-        std::cerr << "ConfigurationLoadCredential failed" << std::endl;
+    status = MsQuic->ConfigurationLoadCredential(configuration_, nullptr);
+    if (QUIC_FAILED(status)) {
+        Logger::getLogger()->error("ConfigurationLoadCredential failed");
         return false;
     }
 
@@ -48,22 +65,31 @@ bool QuicClient::initialize() {
 }
 
 void QuicClient::start() {
-    QUIC_STATUS Status;
+    std::lock_guard<std::mutex> lock(connectionMutex_);
+    QUIC_STATUS status;
 
-    if (QUIC_FAILED(Status = MsQuic->ConnectionOpen(registration_, ClientConnectionCallback, this, &connection_))) {
-        std::cerr << "ConnectionOpen failed" << std::endl;
+    status = MsQuic->ConnectionOpen(registration_, ClientConnectionCallback, this, &connection_);
+    if (QUIC_FAILED(status)) {
+        Logger::getLogger()->error("ConnectionOpen failed");
         return;
     }
 
-    if (QUIC_FAILED(Status = MsQuic->ConnectionStart(connection_, configuration_, QUIC_ADDRESS_FAMILY_UNSPEC, serverIp_.c_str(), serverPort_))) {
-        std::cerr << "ConnectionStart failed" << std::endl;
+    QUIC_ADDR addr = {};
+    QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_UNSPEC);
+    QuicAddrSetPort(&addr, serverPort_);
+
+    status = MsQuic->ConnectionStart(connection_, configuration_, QUIC_ADDRESS_FAMILY_UNSPEC, serverIp_.c_str(), serverPort_);
+    if (QUIC_FAILED(status)) {
+        Logger::getLogger()->error("ConnectionStart failed");
         MsQuic->ConnectionClose(connection_);
         connection_ = nullptr;
-        return;
+    } else {
+        Logger::getLogger()->info("QUIC connection started to {}:{}", serverIp_, serverPort_);
     }
 }
 
 void QuicClient::stop() {
+    std::lock_guard<std::mutex> lock(connectionMutex_);
     if (connection_) {
         MsQuic->ConnectionClose(connection_);
         connection_ = nullptr;
@@ -72,24 +98,28 @@ void QuicClient::stop() {
         MsQuic->ConfigurationClose(configuration_);
         configuration_ = nullptr;
     }
-    if (registration_) {
-        MsQuic->RegistrationClose(registration_);
-        registration_ = nullptr;
-    }
-    MsQuicClose(MsQuic);
 }
 
 void QuicClient::sendData(const uint8_t* data, size_t len) {
-    // Open stream and send data
-    HQUIC Stream = nullptr;
-    if (QUIC_FAILED(MsQuic->StreamOpen(connection_, QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL, ClientStreamCallback, this, &Stream))) {
-        std::cerr << "StreamOpen failed" << std::endl;
+    std::lock_guard<std::mutex> lock(connectionMutex_);
+    if (!connection_) {
+        Logger::getLogger()->error("QUIC connection is not established");
         return;
     }
 
-    if (QUIC_FAILED(MsQuic->StreamStart(Stream, QUIC_STREAM_START_FLAG_IMMEDIATE))) {
-        std::cerr << "StreamStart failed" << std::endl;
-        MsQuic->StreamClose(Stream);
+    HQUIC stream = nullptr;
+    QUIC_STATUS status;
+
+    status = MsQuic->StreamOpen(connection_, QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL, ClientStreamCallback, this, &stream);
+    if (QUIC_FAILED(status)) {
+        Logger::getLogger()->error("StreamOpen failed");
+        return;
+    }
+
+    status = MsQuic->StreamStart(stream, QUIC_STREAM_START_FLAG_IMMEDIATE);
+    if (QUIC_FAILED(status)) {
+        Logger::getLogger()->error("StreamStart failed");
+        MsQuic->StreamClose(stream);
         return;
     }
 
@@ -97,10 +127,11 @@ void QuicClient::sendData(const uint8_t* data, size_t len) {
     buffer.Length = static_cast<uint32_t>(len);
     buffer.Buffer = const_cast<uint8_t*>(data);
 
-    if (QUIC_FAILED(MsQuic->StreamSend(Stream, &buffer, 1, QUIC_SEND_FLAG_FIN, nullptr))) {
-        std::cerr << "StreamSend failed" << std::endl;
-        MsQuic->StreamClose(Stream);
-        return;
+    status = MsQuic->StreamSend(stream, &buffer, 1, QUIC_SEND_FLAG_FIN, nullptr);
+    if (QUIC_FAILED(status)) {
+        Logger::getLogger()->error("StreamSend failed");
+        MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+        MsQuic->StreamClose(stream);
     }
 }
 
@@ -112,11 +143,18 @@ QUIC_STATUS QUIC_API QuicClient::ClientConnectionCallback(HQUIC Connection, void
     QuicClient* client = static_cast<QuicClient*>(Context);
     switch (Event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED:
-        std::cout << "QUIC connected" << std::endl;
+        Logger::getLogger()->info("QUIC connected");
+        break;
+    case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
+        Logger::getLogger()->warn("QUIC connection shutdown by transport, error code: {}", Event->SHUTDOWN_INITIATED_BY_TRANSPORT.ErrorCode);
+        break;
+    case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
+        Logger::getLogger()->warn("QUIC connection shutdown by peer");
         break;
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
-        std::cout << "QUIC shutdown complete" << std::endl;
+        Logger::getLogger()->info("QUIC shutdown complete");
         MsQuic->ConnectionClose(Connection);
+        client->connection_ = nullptr;
         break;
     default:
         break;
