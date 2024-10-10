@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <mutex>
+#include <vector>
 
 class Translator {
 public:
@@ -36,6 +37,11 @@ private:
     std::function<void(const uint8_t* data, size_t len)> rtpToQuicHandler_;
     std::function<void(const uint8_t* data, size_t len)> quicToRtpHandler_;
     std::mutex translatorMutex_;
+
+    // Additional private members for RTP packet construction
+    uint16_t sequenceNumber_;
+    uint32_t timestamp_;
+    uint32_t ssrc_;
 };
 
 #endif // TRANSLATOR_H

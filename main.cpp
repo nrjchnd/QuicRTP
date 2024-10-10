@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "config.h"
 #include "rtp_listener.h"
 #include "quic_client.h"
@@ -27,17 +28,21 @@
 #include <vector>
 #include <unordered_map>
 #include <cstdlib>
+#include <csignal>
 
 int main(int argc, char* argv[]) {
     try {
+        // Initialize the logger
         Logger::init();
 
+        // Load configuration
         Config config;
         if (!config.loadConfig("config.conf")) {
             Logger::getLogger()->error("Failed to load configuration file");
             return -1;
         }
 
+        // Retrieve configuration settings
         bool isSrtp = config.getBool("SRTP", "enable");
         std::string srtpKey;
 
@@ -49,6 +54,10 @@ int main(int argc, char* argv[]) {
                 return -1;
             }
             srtpKey = srtpKeyEnv;
+            if (srtpKey.length() != 60) { // 30 bytes in hex representation
+                Logger::getLogger()->error("Invalid SRTP key length");
+                return -1;
+            }
         }
 
         std::string redisUri = config.get("Cache", "redis_uri");
@@ -69,12 +78,14 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Initialize components
         CacheManager cacheManager(redisUri);
         SessionManager sessionManager;
         Translator translator;
 
         boost::asio::io_context io_context;
 
+        // Retrieve RTP port range from configuration
         int portStart = config.getInt("RTP", "port_range_start");
         int portEnd = config.getInt("RTP", "port_range_end");
 
@@ -83,12 +94,16 @@ int main(int argc, char* argv[]) {
             return -1;
         }
 
+        // Prepare list of available ports
         std::vector<uint16_t> availablePorts;
         for (int port = portStart; port <= portEnd; ++port) {
             availablePorts.push_back(static_cast<uint16_t>(port));
         }
 
+        // Vector to hold RTP listener objects
         std::vector<std::shared_ptr<RtpListener>> rtpListeners;
+
+        // Initialize RTP listeners
         for (uint16_t port : availablePorts) {
             try {
                 auto rtpListener = std::make_shared<RtpListener>(io_context, isSrtp, srtpKey);
@@ -109,7 +124,7 @@ int main(int argc, char* argv[]) {
                         // Translation
                         translator.translateRtpToQuic(data, len);
                     } else {
-                        Logger::getLogger()->warn("Received RTP packet is too short");
+                        Logger::getLogger()->warn("Received RTP packet is too short from {}:{}", sender.address().to_string(), sender.port());
                     }
                 });
 
@@ -120,14 +135,20 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        if (rtpListeners.empty()) {
+            Logger::getLogger()->error("No RTP listeners could be started. Exiting.");
+            return -1;
+        }
+
         // Initialize QUIC client
-        auto quicClient = std::make_shared<QuicClient>(quicServerIp, quicServerPort);
+        auto quicClient = std::make_shared<QuicClient>(quicServerIp, static_cast<uint16_t>(quicServerPort));
         if (!quicClient->initialize()) {
             Logger::getLogger()->error("Failed to initialize QUIC client");
             return -1;
         }
         quicClient->start();
 
+        // Set up the translator handlers
         translator.setRtpToQuicHandler([quicClient](const uint8_t* data, size_t len) {
             quicClient->sendData(data, len);
         });
@@ -138,23 +159,76 @@ int main(int argc, char* argv[]) {
 
         translator.setQuicToRtpHandler([&](const uint8_t* data, size_t len) {
             // Implement sending data back to RTP endpoints if necessary
-            // This could involve looking up the appropriate endpoint from the cache
+            // Retrieve SSRC from RTP header to find the destination
+            if (len >= 12) {
+                uint32_t ssrc = (data[8] << 24) | (data[9] << 16) | (data[10] << 8) | data[11];
+
+                // Retrieve the endpoint from cache
+                std::string endpointStr = cacheManager.get(std::to_string(ssrc));
+                if (!endpointStr.empty()) {
+                    // Parse endpoint string to get IP and port
+                    size_t colonPos = endpointStr.find(':');
+                    if (colonPos != std::string::npos) {
+                        std::string ipStr = endpointStr.substr(0, colonPos);
+                        uint16_t port = static_cast<uint16_t>(std::stoi(endpointStr.substr(colonPos + 1)));
+
+                        // Create a socket and send the RTP packet
+                        boost::asio::ip::udp::socket socket(io_context);
+                        boost::asio::ip::udp::endpoint destination(boost::asio::ip::address::from_string(ipStr), port);
+
+                        socket.open(boost::asio::ip::udp::v4());
+                        socket.send_to(boost::asio::buffer(data, len), destination);
+                        socket.close();
+
+                        Logger::getLogger()->debug("Sent RTP packet to {}:{}", ipStr, port);
+                    } else {
+                        Logger::getLogger()->warn("Invalid endpoint format for SSRC {}", ssrc);
+                    }
+                } else {
+                    Logger::getLogger()->warn("No endpoint found for SSRC {}", ssrc);
+                }
+            } else {
+                Logger::getLogger()->warn("Received RTP packet is too short for sending back");
+            }
         });
 
         // Run the IO context in a separate thread
         std::thread ioThread([&io_context]() {
-            io_context.run();
+            try {
+                io_context.run();
+            } catch (const std::exception& e) {
+                Logger::getLogger()->error("IO context error: {}", e.what());
+            }
+        });
+
+        // Signal handling for graceful shutdown
+        std::atomic<bool> running(true);
+        std::signal(SIGINT, [](int) {
+            running = false;
+        });
+        std::signal(SIGTERM, [](int) {
+            running = false;
         });
 
         // Keep the main thread running
         Logger::getLogger()->info("Translator is running...");
-        while (true) {
+        while (running.load()) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 
         // Clean up
+        Logger::getLogger()->info("Shutting down...");
+
         io_context.stop();
-        ioThread.join();
+        if (ioThread.joinable()) {
+            ioThread.join();
+        }
+
+        quicClient->stop();
+
+        for (auto& listener : rtpListeners) {
+            listener->stop();
+        }
 
     } catch (const std::exception& e) {
         Logger::getLogger()->error("Application error: {}", e.what());
@@ -163,3 +237,4 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+
