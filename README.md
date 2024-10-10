@@ -24,10 +24,4 @@ Dynamic Routing: Routes RTP packets based on SSRC using cached information.
 Multiple Endpoints: Supports multiple RTP and QUIC endpoints defined in the configuration file.
 SRTP Support: Handles SRTP encryption/decryption using libsrtp2.
 
-Notes
-Security: Proper key handling for SRTP is essential. Ensure keys are securely managed.
-Error Handling: Additional error handling and logging should be implemented for production use.
-Performance Tuning: Optimize thread pool sizes, buffer sizes, and other parameters based on workload.
-Testing: Thorough testing with various RTP/QUIC endpoints is recommended.
-
 
