@@ -67,12 +67,13 @@ RUN ln -s /usr/local/lib/libhiredis.so /usr/lib/x86_64-linux-gnu/libhiredis.so &
     ln -s /usr/local/lib/libhiredis.so.1.2.1-dev /usr/lib/x86_64-linux-gnu/libhiredis.so.1.1.0
 
 # Copy source code
-COPY . /app
+COPY ../src/ /app
 WORKDIR /app
 
 # Build the application
 RUN mkdir build && cd build && \
     cmake .. && make && make install
+#Either use an entrypoint script or preconfigure a config file and copy it to the container under /etc/quicrtp/quicrtp.conf - the install copies a sample config file to /etc/quicrtp/quicrtp.conf
 
 # Expose ports
 EXPOSE 5000-5100/udp 5000-5100/tcp 4433/udp 4433/tcp
