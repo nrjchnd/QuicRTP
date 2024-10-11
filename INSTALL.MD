@@ -55,7 +55,8 @@ wget https://github.com/sewenew/redis-plus-plus/archive/refs/tags/1.3.4.tar.gz
 # Extract the archive
 tar xzf 1.3.4.tar.gz
 cd redis-plus-plus-1.3.4
-
+# On Ubuntu 24.04 I needed to do this: 
+sed -i '/#include "cxx_utils.h"/a #include <cstdint>' src/sw/redis++/utils.h
 # Create build directory
 mkdir build && cd build
 
@@ -123,6 +124,8 @@ Note: If you encounter any errors during the cmake or make steps, ensure that al
 Ensure that the system can find the libraries installed in /usr/local/lib.
 
 export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/local.conf
+sudo ldconfig
 
 #Probably best to make it persistent with: 
 echo 'export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
@@ -187,13 +190,22 @@ cd ../..
 # Install Redis server
 sudo apt-get install -y redis-server
 
-# Install Hiredis
-sudo apt-get install -y libhiredis-dev
+# Install Hiredis From Source
+cd /usr/src
+git clone https://github.com/redis/hiredis.git
+cd hiredis
+
+mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
+make
+make install
 
 # Install Redis++
 wget https://github.com/sewenew/redis-plus-plus/archive/refs/tags/1.3.4.tar.gz
 tar xzf 1.3.4.tar.gz
 cd redis-plus-plus-1.3.4
+#On Ubuntu 24.04 I needed to do this: 
+sed -i '/#include "cxx_utils.h"/a #include <cstdint>' src/sw/redis++/utils.h
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
 make
@@ -211,6 +223,11 @@ sudo apt-get install -y libboost-system-dev libboost-thread-dev
 
 # Set library path environment variable
 export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/local.conf
+sudo ldconfig
+ln -s /usr/local/lib/libhiredis.so /usr/lib/x86_64-linux-gnu/libhiredis.so
+ln -s /usr/local/lib/libhiredis.so.1.2.1-dev /usr/local/lib/libhiredis.so.1.1.0
+ln -s /usr/local/lib/libhiredis.so.1.2.1-dev /usr/lib/x86_64-linux-gnu/libhiredis.so.1.1.0
 
 # Clone your project repository
 git clone https://your-repo-url.git /path/to/QuicRtp
@@ -220,6 +237,7 @@ cd /path/to/QuicRtp
 mkdir build && cd build
 cmake ..
 make
+make install
 
 # Set SRTP_KEY environment variable
 export SRTP_KEY=your_srtp_key_here
@@ -228,15 +246,15 @@ export SRTP_KEY=your_srtp_key_here
 sudo systemctl start redis-server
 sudo systemctl enable redis-server
 
-# Copy config.conf to the build directory
-cp /path/to/config.conf ./
+# Edit / set config
+vi /etc/quicrtp/quicrtp.conf 
 
 # Run the application
 ./QuicRtp
 
 Additional Notes
-Setting up config.conf
-Ensure your config.conf file is properly configured. Here is an example:
+Setting up quicrtp.conf 
+Ensure your quicrtp.conf  file is properly configured. Here is an example:
 
 [RTP]
 port_range_start = 5000

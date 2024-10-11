@@ -8,7 +8,7 @@
  *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an **"AS IS" BASIS,**
+ * distributed under an **"AS IS" BASIS,**
  * **WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.**
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -20,6 +20,10 @@
 #include <mutex>
 #include <cstdint>
 
+struct SessionInfo {
+    // Add session-related members if needed
+};
+
 class SessionManager {
 public:
     SessionManager();
@@ -30,7 +34,7 @@ public:
     bool hasSession(uint32_t ssrc);
 
 private:
-    std::map<uint32_t, /* session info */> sessions_;
+    std::map<uint32_t, SessionInfo> sessions_;
     std::mutex mutex_;
 };
 

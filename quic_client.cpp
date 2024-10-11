@@ -8,7 +8,7 @@
  *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an **"AS IS" BASIS,**
+ * distributed under an **"AS IS" BASIS,**
  * **WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.**
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -17,6 +17,7 @@
 #include "logger.h"
 #include <iostream>
 #include <stdexcept>
+#include <cstring>
 
 const QUIC_API_TABLE* MsQuic;
 HQUIC registration_ = nullptr;
@@ -25,8 +26,8 @@ QuicClient::QuicClient(const std::string& serverIp, uint16_t serverPort)
     : serverIp_(serverIp), serverPort_(serverPort), configuration_(nullptr), connection_(nullptr)
 {
     // Initialize MsQuic
-    if (QUIC_FAILED(MsQuicOpen(&MsQuic))) {
-        throw std::runtime_error("MsQuicOpen failed");
+    if (QUIC_FAILED(MsQuicOpen2(&MsQuic))) {
+        throw std::runtime_error("MsQuicOpen2 failed");
     }
 
     // Create a registration for the app
@@ -61,8 +62,6 @@ bool QuicClient::initialize() {
     settings.IdleTimeoutMs = 30000;
     settings.IsSet.DisconnectTimeoutMs = TRUE;
     settings.DisconnectTimeoutMs = 10000;
-    settings.IsSet.CertValidationFlags = TRUE;
-    settings.CertValidationFlags = QUIC_CERTIFICATE_FLAG_DISABLE_CERT_VALIDATION;
 
     status = MsQuic->ConfigurationOpen(registration_, &alpnBuffer, 1, &settings, sizeof(settings), nullptr, &configuration_);
     if (QUIC_FAILED(status)) {
@@ -70,7 +69,13 @@ bool QuicClient::initialize() {
         return false;
     }
 
-    status = MsQuic->ConfigurationLoadCredential(configuration_, nullptr);
+    // Set up credential config
+    QUIC_CREDENTIAL_CONFIG credConfig;
+    memset(&credConfig, 0, sizeof(credConfig));
+    credConfig.Type = QUIC_CREDENTIAL_TYPE_NONE;
+    credConfig.Flags = QUIC_CREDENTIAL_FLAG_CLIENT | QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
+
+    status = MsQuic->ConfigurationLoadCredential(configuration_, &credConfig);
     if (QUIC_FAILED(status)) {
         Logger::getLogger()->error("ConfigurationLoadCredential failed");
         return false;
@@ -88,10 +93,6 @@ void QuicClient::start() {
         Logger::getLogger()->error("ConnectionOpen failed");
         return;
     }
-
-    QUIC_ADDR addr = {};
-    QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_UNSPEC);
-    QuicAddrSetPort(&addr, serverPort_);
 
     status = MsQuic->ConnectionStart(connection_, configuration_, QUIC_ADDRESS_FAMILY_UNSPEC, serverIp_.c_str(), serverPort_);
     if (QUIC_FAILED(status)) {

@@ -8,27 +8,25 @@
  *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an **"AS IS" BASIS,**
+ * distributed under an **"AS IS" BASIS,**
  * **WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.**
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
 #include "session_manager.h"
+#include <stdexcept>
 
 SessionManager::SessionManager() {
-
+    // Constructor implementation
 }
 
 SessionManager::~SessionManager() {
-
+    // Destructor implementation
 }
 
 void SessionManager::addSession(uint32_t ssrc) {
     std::lock_guard<std::mutex> lock(mutex_);
-    // Add session to map if not exists
-    if (sessions_.find(ssrc) == sessions_.end()) {
-        sessions_[ssrc] = /* session info */;
-    }
+    sessions_[ssrc] = SessionInfo();
 }
 
 void SessionManager::removeSession(uint32_t ssrc) {

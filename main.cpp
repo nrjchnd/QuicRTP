@@ -8,8 +8,8 @@
  *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an **"AS IS" BASIS,**
- * **WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.**
+ * distributed under an **"AS IS" BASIS,**
+ * **WITHOUT WARRANTIES OR CONDITIONS OR CONDITIONS OF ANY KIND, either express or implied.**
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
@@ -29,6 +29,14 @@
 #include <unordered_map>
 #include <cstdlib>
 #include <csignal>
+#include <atomic>
+#include <chrono>
+
+std::atomic<bool> running(true);
+
+void signal_handler(int) {
+    running = false;
+}
 
 int main(int argc, char* argv[]) {
     try {
@@ -202,13 +210,8 @@ int main(int argc, char* argv[]) {
         });
 
         // Signal handling for graceful shutdown
-        std::atomic<bool> running(true);
-        std::signal(SIGINT, [](int) {
-            running = false;
-        });
-        std::signal(SIGTERM, [](int) {
-            running = false;
-        });
+        std::signal(SIGINT, signal_handler);
+        std::signal(SIGTERM, signal_handler);
 
         // Keep the main thread running
         Logger::getLogger()->info("Translator is running...");
@@ -237,4 +240,3 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
-
