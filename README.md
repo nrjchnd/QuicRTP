@@ -1,4 +1,5 @@
-QuicRTP
+QuicRTP 
+
 QuicRTP is a high-performance application designed for asynchronous RTP packet handling with multithreading and SRTP support. It enables dynamic routing of RTP packets based on SSRC information, with the ability to scale horizontally using Redis for session management. The application supports both RTP and QUIC endpoints, providing flexibility in streaming environments.
 
 Features
