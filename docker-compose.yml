@@ -1,9 +1,12 @@
 version: '3'
 services:
-  translator:
+  quicrtp:
     build: .
     ports:
       - "5000-5100:5000-5100/udp"
+      - "5000-5100:5000-5100/tcp"
+      - "4433:4433/udp"
+      - "4433:4433/tcp"
     environment:
       - SRTP_KEY=${SRTP_KEY}
     depends_on:
