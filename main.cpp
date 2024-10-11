@@ -45,7 +45,7 @@ int main(int argc, char* argv[]) {
 
         // Load configuration
         Config config;
-        if (!config.loadConfig("config.conf")) {
+        if (!config.loadConfig()) {
             Logger::getLogger()->error("Failed to load configuration file");
             return -1;
         }

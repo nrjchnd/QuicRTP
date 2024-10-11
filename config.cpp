@@ -20,40 +20,62 @@
 #include <cctype>
 #include <stdexcept>
 
-bool Config::loadConfig(const std::string& filename) {
-    std::ifstream file(filename);
-    if (!file.is_open())
-        throw std::runtime_error("Unable to open configuration file: " + filename);
+const std::string DEFAULT_CONFIG_PATH = "/etc/quicrtp/quicrtp.conf";
+
+// Helper method to trim whitespace from both ends of a string
+std::string Config::trim(const std::string& str) {
+    const char* whitespace = " \t\n\r\f\v";
+    size_t start = str.find_first_not_of(whitespace);
+    if (start == std::string::npos)
+        return ""; // All whitespace
+
+    size_t end = str.find_last_not_of(whitespace);
+    return str.substr(start, end - start + 1);
+}
+
+bool Config::loadConfig() {
+    std::ifstream file(DEFAULT_CONFIG_PATH);
+    if (!file.is_open()) {
+        throw std::runtime_error("Unable to open configuration file: " + DEFAULT_CONFIG_PATH);
+    }
 
     std::string line;
     std::string currentSection;
 
     while (std::getline(file, line)) {
-        // Remove comments
+        // Remove comments starting with '#'
         auto commentPos = line.find('#');
-        if (commentPos != std::string::npos)
+        if (commentPos != std::string::npos) {
             line = line.substr(0, commentPos);
+        }
 
-        // Trim whitespace
-        line.erase(std::remove_if(line.begin(), line.end(), ::isspace), line.end());
+        // Trim whitespace from both ends
+        line = trim(line);
 
-        if (line.empty())
-            continue;
+        if (line.empty()) {
+            continue; // Skip empty lines
+        }
 
-        // Check for section
+        // Check for section headers [Section]
         if (line.front() == '[' && line.back() == ']') {
             currentSection = line.substr(1, line.size() - 2);
-        } else {
-            // Parse key=value
-            auto equalPos = line.find('=');
-            if (equalPos != std::string::npos) {
-                std::string key = line.substr(0, equalPos);
-                std::string value = line.substr(equalPos + 1);
+            currentSection = trim(currentSection); // Trim in case of extra spaces
+            continue;
+        }
 
-                data[currentSection][key] = value;
-            } else {
-                throw std::runtime_error("Invalid line in config file: " + line);
+        // Parse key=value pairs
+        auto equalPos = line.find('=');
+        if (equalPos != std::string::npos) {
+            std::string key = trim(line.substr(0, equalPos));
+            std::string value = trim(line.substr(equalPos + 1));
+
+            if (key.empty()) {
+                throw std::runtime_error("Empty key found in section [" + currentSection + "]");
             }
+
+            data[currentSection][key] = value;
+        } else {
+            throw std::runtime_error("Invalid line in config file: " + line);
         }
     }
 
@@ -65,8 +87,9 @@ std::string Config::get(const std::string& section, const std::string& key) cons
     auto secIt = data.find(section);
     if (secIt != data.end()) {
         auto keyIt = secIt->second.find(key);
-        if (keyIt != secIt->second.end())
+        if (keyIt != secIt->second.end()) {
             return keyIt->second;
+        }
     }
     return "";
 }
@@ -74,7 +97,7 @@ std::string Config::get(const std::string& section, const std::string& key) cons
 bool Config::getBool(const std::string& section, const std::string& key) const {
     std::string val = get(section, key);
     std::transform(val.begin(), val.end(), val.begin(), ::tolower);
-    return val == "true" || val == "1";
+    return (val == "true" || val == "1" || val == "yes" || val == "on");
 }
 
 int Config::getInt(const std::string& section, const std::string& key) const {
@@ -82,7 +105,9 @@ int Config::getInt(const std::string& section, const std::string& key) const {
     try {
         return std::stoi(val);
     } catch (const std::invalid_argument&) {
-        throw std::runtime_error("Invalid integer value for " + key + " in section " + section);
+        throw std::runtime_error("Invalid integer value for key '" + key + "' in section '" + section + "'");
+    } catch (const std::out_of_range&) {
+        throw std::runtime_error("Integer value out of range for key '" + key + "' in section '" + section + "'");
     }
 }
 
@@ -91,8 +116,13 @@ std::vector<std::string> Config::getList(const std::string& section, const std::
     std::vector<std::string> list;
     std::stringstream ss(val);
     std::string item;
+
     while (std::getline(ss, item, ',')) {
-        list.push_back(item);
+        item = trim(item);
+        if (!item.empty()) {
+            list.push_back(item);
+        }
     }
+
     return list;
 }

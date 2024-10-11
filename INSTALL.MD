@@ -92,27 +92,8 @@ Step 2: Build the Application
 
 2. Ensure CMakeLists.txt is Correctly Configured
 Your CMakeLists.txt should include the correct paths for the libraries and headers installed in /usr/local.
+Make any adjustments 
 
-Example CMakeLists.txt Adjustments:
-
-cmake
-# Add these lines to include directories and link directories
-include_directories(/usr/local/include)
-link_directories(/usr/local/lib)
-
-# Link the necessary libraries
-target_link_libraries(QuicRtp
-    srtp2
-    msquic
-    hiredis
-    redis++
-    pthread
-    boost_system
-    boost_thread
-    spdlog
-    ssl
-    crypto
-)
 3. Create a Build Directory and Build the Project
 
 mkdir build && cd build
