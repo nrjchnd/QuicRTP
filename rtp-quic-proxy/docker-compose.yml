@@ -1,0 +1,33 @@
+version: '3'
+services:
+  redis:
+    image: redis:latest
+    container_name: redis
+    volumes:
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      - "6379:6379"
+
+  config-ui:
+    build:
+      context: ./config-ui
+    container_name: config-ui
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+
+  rtp-to-quic:
+    build:
+      context: ./rtp-to-quic
+    container_name: rtp-to-quic
+    depends_on:
+      - redis
+
+  quic-to-rtp:
+    build:
+      context: ./quic-to-rtp
+    container_name: quic-to-rtp
+    depends_on:
+      - redis
